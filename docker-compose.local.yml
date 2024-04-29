@@ -1,0 +1,129 @@
+version: "3.8"
+
+services:
+
+  db:
+    image: mysql:8.2
+    restart: always
+    volumes:
+      - ./tmp/db:/var/lib/mysql
+    environment:
+      MYSQL_DATABASE: ${DB_DATABASE}
+      MYSQL_USER: ${DB_USERNAME}
+      MYSQL_PASSWORD: ${DB_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - 8102:3306
+    command: mysqld --character-set-server=utf8 --collation-server=utf8_unicode_ci
+    container_name: project_db
+    networks:
+      - web
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: php-phpmyadmin
+    restart: unless-stopped
+    environment:
+      - PMA_ARBITRARY=1
+      - UPLOAD_LIMIT=1024M
+      - MEMORY_LIMIT=1024M
+      - MAX_EXECUTION_TIME=300
+    ports:
+      - 8080:80
+    depends_on:
+      - db
+    volumes:
+      - /sessions
+    networks:
+      - web
+
+  rabbitmq:
+    image: rabbitmq:3.12-management-alpine
+    container_name: rabbitmq
+    hostname: rabbitmq
+    ports:
+      - "${RABBITMQ_PORT:-5672}:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=admin
+      - RABBITMQ_DEFAULT_PASS=admin
+    networks:
+      - web
+
+  redis:
+    image: 'redis:alpine'
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+        - ./_docker/redis/data:/var/lib/redis
+        - ./_docker/redis/data/conf:/usr/local/etc/redis/redis.conf
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: [ "CMD", "redis-cli", "ping" ]
+      retries: 3
+      timeout: 5s
+    networks:
+      - web
+
+  elasticsearch:
+    image: elasticsearch:8.11.1
+    container_name: elasticsearch
+    ports:
+      - '${ELASTICSEARCH_PORT:-9200}:9200'
+    environment:
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - "ES_JAVA_OPTS=-Xms512m -Xmx512m"
+    networks:
+      - web
+
+  kibana:
+    image: kibana:8.11.1
+    container_name: kibana
+    ports:
+      - '${KIBANA_PORT:-5601}:5601'
+    environment:
+      ELASTICSEARCH_HOSTS: "http://elasticsearch:${ELASTICSEARCH_PORT}"
+      ELASTICSEARCH_URL: "http://elasticsearch:${ELASTICSEARCH_PORT}"
+    depends_on:
+      - elasticsearch
+    networks:
+      - web
+
+  app:
+    build:
+      context: .
+      dockerfile: _docker/app/Dockerfile
+    volumes:
+      - ./:/var/www
+    container_name: project_app
+    depends_on:
+      - db
+      - rabbitmq
+      - redis
+      - kibana
+    networks:
+      - web
+
+  nginx:
+    image: nginx:latest
+    volumes:
+      - ./:/var/www
+      - ./_docker/nginx/conf.d:/etc/nginx/conf.d
+      - ./_docker/nginx/log:/var/log/nginx
+    ports:
+      - 8876:80
+    depends_on:
+      - app
+    container_name: project_nginx
+    networks:
+      - web
+
+volumes:
+  mysql:
+    driver: local
+
+networks:
+  web:
+    driver: bridge
